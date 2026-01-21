@@ -1,0 +1,91 @@
+# Build results
+[Bb]in/
+[Oo]bj/
+[Oo]ut/
+
+# IDE
+.vs/
+.vscode/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+.idea/
+*.swp
+*~
+
+# Test results
+TestResults/
+coverage/
+*.coverage
+*.coveragexml
+
+# NuGet
+packages/
+*.nupkg
+project.lock.json
+project.fragment.lock.json
+
+# ASP.NET
+wwwroot/lib/
+secrets.json
+
+# User secrets
+secrets.json
+
+# Log files
+*.log
+logs/
+
+# Models (large binary files)
+models/*.bin
+models/*.pt
+
+# Local environment files
+.env
+.env.local
+.env.*.local
+appsettings.local.json
+
+# OS generated files
+.DS_Store
+Thumbs.db
+ehthumbs.db
+
+# Docker
+.docker/
+
+# Rider
+.idea/
+*.sln.iml
+
+# Resharper
+_ReSharper*/
+*.[Rr]e[Ss]harper
+*.DotSettings.user
+
+# JetBrains Rider
+*.sln.iml
+
+# NCrunch
+_NCrunch_*
+.*crunch*.local.xml
+nCrunchTemp_*
+
+# Visual Studio Code
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+
+# MiniProfiler
+App_Data/*.json
+
+# Backup files
+**/backup/
+*.bak
+
+# Local database files
+*.mdf
+*.ldf

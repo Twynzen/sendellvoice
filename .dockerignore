@@ -1,0 +1,49 @@
+# Git
+.git
+.gitignore
+
+# Build results
+**/bin/
+**/obj/
+**/out/
+
+# IDE
+.vs/
+.vscode/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+.idea/
+
+# Test results
+**/TestResults/
+**/coverage/
+
+# NuGet
+**/packages/
+
+# Misc
+**/.DS_Store
+**/Thumbs.db
+*.log
+logs/
+
+# Docker
+**/docker-compose*.yml
+**/.docker/
+Dockerfile*
+
+# Documentation
+*.md
+!README.md
+
+# Models (download at runtime)
+models/
+
+# Environment files
+.env
+.env.*
+appsettings.*.json
+!appsettings.json
+!appsettings.Development.json

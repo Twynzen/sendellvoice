@@ -145,12 +145,20 @@ public class AzureAISearchService : IVectorStoreService
         int topK = 5,
         CancellationToken cancellationToken = default)
     {
+        // Validar topK para prevenir DoS
+        topK = Math.Clamp(topK, 1, 100);
+
         string? azureFilter = null;
 
         if (!string.IsNullOrEmpty(filter) && filter.StartsWith("category:"))
         {
-            var category = filter.Substring("category:".Length);
-            azureFilter = $"category eq '{category}'";
+            var category = filter["category:".Length..];
+            // Sanitizar para prevenir inyección OData - solo permitir caracteres alfanuméricos y espacios
+            category = SanitizeODataValue(category);
+            if (!string.IsNullOrEmpty(category))
+            {
+                azureFilter = $"category eq '{category}'";
+            }
         }
 
         var searchOptions = new SearchOptions
@@ -199,10 +207,20 @@ public class AzureAISearchService : IVectorStoreService
 
     public async Task DeleteBySourceAsync(string sourceFile, CancellationToken cancellationToken = default)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(sourceFile, nameof(sourceFile));
+
+        // Sanitizar sourceFile para prevenir inyección OData
+        var sanitizedSourceFile = SanitizeODataValue(sourceFile);
+        if (string.IsNullOrEmpty(sanitizedSourceFile))
+        {
+            _logger.LogWarning("Invalid sourceFile provided for deletion: {SourceFile}", sourceFile);
+            return;
+        }
+
         // Search for all documents with the source file
         var searchOptions = new SearchOptions
         {
-            Filter = $"sourceFile eq '{sourceFile}'",
+            Filter = $"sourceFile eq '{sanitizedSourceFile}'",
             Size = 1000,
             Select = { "id" }
         };
@@ -254,5 +272,34 @@ public class AzureAISearchService : IVectorStoreService
         }
 
         return doc;
+    }
+
+    /// <summary>
+    /// Sanitiza un valor para uso seguro en filtros OData.
+    /// Previene ataques de inyección OData eliminando caracteres peligrosos.
+    /// </summary>
+    private static string SanitizeODataValue(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return string.Empty;
+        }
+
+        // Escapar comillas simples duplicándolas (estándar OData)
+        var sanitized = value.Replace("'", "''");
+
+        // Remover caracteres de control y caracteres potencialmente peligrosos
+        sanitized = new string(sanitized
+            .Where(c => !char.IsControl(c) && c != '\'' || c == ' ')
+            .ToArray());
+
+        // Limitar longitud para prevenir DoS
+        const int maxLength = 256;
+        if (sanitized.Length > maxLength)
+        {
+            sanitized = sanitized[..maxLength];
+        }
+
+        return sanitized.Trim();
     }
 }

@@ -2,7 +2,6 @@ using Microsoft.Extensions.Logging;
 using Microsoft.SemanticKernel;
 using SendellVoice.Application.Common.Interfaces;
 using SendellVoice.Application.Common.Models;
-using SendellVoice.Application.Plugins;
 using SendellVoice.Domain.Entities;
 using SendellVoice.Domain.Enums;
 using SendellVoice.Domain.Interfaces;
@@ -10,7 +9,7 @@ using SendellVoice.Domain.Interfaces;
 namespace SendellVoice.Application.Services;
 
 /// <summary>
-/// Orchestrates conversation flows using Semantic Kernel and AI services.
+/// Orquesta flujos de conversación usando Semantic Kernel y servicios de IA.
 /// </summary>
 public class ConversationOrchestrator
 {
@@ -21,6 +20,11 @@ public class ConversationOrchestrator
     private readonly IVectorStoreService _vectorStoreService;
     private readonly ILogger<ConversationOrchestrator> _logger;
 
+    // Nombres de plugins para evitar strings mágicos
+    private const string IntentClassificationPluginName = "IntentClassification";
+    private const string KnowledgeRetrievalPluginName = "KnowledgeRetrieval";
+    private const string ResponseGenerationPluginName = "ResponseGeneration";
+
     public ConversationOrchestrator(
         Kernel kernel,
         IConversationRepository conversationRepository,
@@ -29,121 +33,269 @@ public class ConversationOrchestrator
         IVectorStoreService vectorStoreService,
         ILogger<ConversationOrchestrator> logger)
     {
-        _kernel = kernel;
-        _conversationRepository = conversationRepository;
-        _messageRepository = messageRepository;
-        _embeddingService = embeddingService;
-        _vectorStoreService = vectorStoreService;
-        _logger = logger;
+        _kernel = kernel ?? throw new ArgumentNullException(nameof(kernel));
+        _conversationRepository = conversationRepository ?? throw new ArgumentNullException(nameof(conversationRepository));
+        _messageRepository = messageRepository ?? throw new ArgumentNullException(nameof(messageRepository));
+        _embeddingService = embeddingService ?? throw new ArgumentNullException(nameof(embeddingService));
+        _vectorStoreService = vectorStoreService ?? throw new ArgumentNullException(nameof(vectorStoreService));
+        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+
+        // Validar que los plugins requeridos estén registrados
+        ValidateRequiredPlugins();
     }
 
     /// <summary>
-    /// Processes an incoming customer message and generates a response.
+    /// Valida que todos los plugins requeridos estén registrados en el kernel.
+    /// </summary>
+    private void ValidateRequiredPlugins()
+    {
+        var requiredPlugins = new[]
+        {
+            IntentClassificationPluginName,
+            KnowledgeRetrievalPluginName,
+            ResponseGenerationPluginName
+        };
+
+        var missingPlugins = requiredPlugins
+            .Where(name => !_kernel.Plugins.TryGetPlugin(name, out _))
+            .ToList();
+
+        if (missingPlugins.Any())
+        {
+            var message = $"Plugins requeridos no encontrados: {string.Join(", ", missingPlugins)}";
+            _logger.LogError(message);
+            throw new InvalidOperationException(message);
+        }
+
+        _logger.LogDebug("Todos los plugins requeridos están registrados");
+    }
+
+    /// <summary>
+    /// Obtiene un plugin de forma segura con manejo de errores apropiado.
+    /// </summary>
+    private KernelPlugin GetRequiredPlugin(string pluginName)
+    {
+        if (_kernel.Plugins.TryGetPlugin(pluginName, out var plugin))
+        {
+            return plugin;
+        }
+
+        var message = $"Plugin requerido no encontrado: {pluginName}";
+        _logger.LogError(message);
+        throw new InvalidOperationException(message);
+    }
+
+    /// <summary>
+    /// Procesa un mensaje entrante del cliente y genera una respuesta.
     /// </summary>
     public async Task<OrchestratorResult> ProcessMessageAsync(
         Guid conversationId,
         string customerMessage,
         CancellationToken cancellationToken = default)
     {
-        _logger.LogInformation("Processing message for conversation: {ConversationId}", conversationId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(customerMessage, nameof(customerMessage));
 
-        // Get or create conversation
-        var conversation = await _conversationRepository.GetByIdWithMessagesAsync(conversationId, cancellationToken);
-        if (conversation == null)
+        _logger.LogInformation("Procesando mensaje para conversación: {ConversationId}", conversationId);
+
+        try
         {
-            _logger.LogWarning("Conversation not found: {ConversationId}", conversationId);
-            return OrchestratorResult.Failed("Conversation not found");
-        }
-
-        // Save incoming message
-        var incomingMessage = new Message
-        {
-            Id = Guid.NewGuid(),
-            ConversationId = conversationId,
-            Content = customerMessage,
-            Direction = MessageDirection.Inbound,
-            Type = MessageType.Text,
-            CreatedAt = DateTime.UtcNow,
-            IsFromBot = false
-        };
-        await _messageRepository.AddAsync(incomingMessage, cancellationToken);
-
-        // Classify intent
-        var intentPlugin = _kernel.Plugins["IntentClassification"];
-        var intentResult = await _kernel.InvokeAsync<IntentResult>(
-            intentPlugin["classify_intent"],
-            new() { ["customerMessage"] = customerMessage },
-            cancellationToken);
-
-        // Update message with intent
-        incomingMessage.DetectedIntent = intentResult.Intent;
-        incomingMessage.IntentConfidence = intentResult.Confidence;
-        await _messageRepository.UpdateAsync(incomingMessage, cancellationToken);
-
-        // Update conversation with primary intent if higher confidence
-        if (conversation.IntentConfidence == null || intentResult.Confidence > conversation.IntentConfidence)
-        {
-            conversation.PrimaryIntent = intentResult.Intent;
-            conversation.IntentConfidence = intentResult.Confidence;
-            await _conversationRepository.UpdateAsync(conversation, cancellationToken);
-        }
-
-        // Check if escalation is needed
-        if (ShouldEscalate(intentResult))
-        {
-            _logger.LogInformation("Escalation triggered for conversation: {ConversationId}", conversationId);
-            return await HandleEscalationAsync(conversation, intentResult, cancellationToken);
-        }
-
-        // Search knowledge base for relevant information
-        var knowledgePlugin = _kernel.Plugins["KnowledgeRetrieval"];
-        var context = await _kernel.InvokeAsync<string>(
-            knowledgePlugin["get_formatted_context"],
-            new() { ["query"] = customerMessage, ["maxDocuments"] = 3 },
-            cancellationToken);
-
-        // Build conversation history
-        var recentMessages = await _messageRepository.GetRecentMessagesAsync(conversationId, 5, cancellationToken);
-        var historyBuilder = new System.Text.StringBuilder();
-        foreach (var msg in recentMessages.OrderBy(m => m.CreatedAt))
-        {
-            var speaker = msg.IsFromBot ? "Agent" : "Customer";
-            historyBuilder.AppendLine($"{speaker}: {msg.Content}");
-        }
-
-        // Generate response
-        var responsePlugin = _kernel.Plugins["ResponseGeneration"];
-        var response = await _kernel.InvokeAsync<string>(
-            responsePlugin["generate_response"],
-            new()
+            // Obtener conversación
+            var conversation = await _conversationRepository.GetByIdWithMessagesAsync(conversationId, cancellationToken);
+            if (conversation == null)
             {
-                ["customerMessage"] = customerMessage,
-                ["intent"] = intentResult.Intent.ToString(),
-                ["context"] = context,
-                ["conversationHistory"] = historyBuilder.ToString()
-            },
-            cancellationToken);
+                _logger.LogWarning("Conversación no encontrada: {ConversationId}", conversationId);
+                return OrchestratorResult.Failed("Conversación no encontrada");
+            }
 
-        // Save outgoing message
-        var outgoingMessage = new Message
+            // Guardar mensaje entrante
+            var incomingMessage = new Message
+            {
+                Id = Guid.NewGuid(),
+                ConversationId = conversationId,
+                Content = customerMessage,
+                Direction = MessageDirection.Inbound,
+                Type = MessageType.Text,
+                CreatedAt = DateTime.UtcNow,
+                IsFromBot = false
+            };
+            await _messageRepository.AddAsync(incomingMessage, cancellationToken);
+
+            // Clasificar intención
+            var intentResult = await ClassifyIntentAsync(customerMessage, cancellationToken);
+
+            // Actualizar mensaje con intención
+            incomingMessage.DetectedIntent = intentResult.Intent;
+            incomingMessage.IntentConfidence = intentResult.Confidence;
+            await _messageRepository.UpdateAsync(incomingMessage, cancellationToken);
+
+            // Actualizar conversación si la confianza es mayor
+            if (conversation.IntentConfidence == null || intentResult.Confidence > conversation.IntentConfidence)
+            {
+                conversation.PrimaryIntent = intentResult.Intent;
+                conversation.IntentConfidence = intentResult.Confidence;
+                await _conversationRepository.UpdateAsync(conversation, cancellationToken);
+            }
+
+            // Verificar si se necesita escalación
+            if (ShouldEscalate(intentResult))
+            {
+                _logger.LogInformation("Escalación activada para conversación: {ConversationId}", conversationId);
+                return await HandleEscalationAsync(conversation, intentResult, cancellationToken);
+            }
+
+            // Buscar información relevante en base de conocimiento
+            var context = await GetKnowledgeContextAsync(customerMessage, cancellationToken);
+
+            // Construir historial de conversación
+            var conversationHistory = await BuildConversationHistoryAsync(conversationId, cancellationToken);
+
+            // Generar respuesta
+            var response = await GenerateResponseAsync(
+                customerMessage,
+                intentResult,
+                context,
+                conversationHistory,
+                cancellationToken);
+
+            // Guardar mensaje saliente
+            var outgoingMessage = new Message
+            {
+                Id = Guid.NewGuid(),
+                ConversationId = conversationId,
+                Content = response,
+                Direction = MessageDirection.Outbound,
+                Type = MessageType.Text,
+                CreatedAt = DateTime.UtcNow,
+                IsFromBot = true
+            };
+            await _messageRepository.AddAsync(outgoingMessage, cancellationToken);
+
+            _logger.LogInformation("Respuesta generada para conversación: {ConversationId}", conversationId);
+
+            return OrchestratorResult.Success(response, intentResult);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            Id = Guid.NewGuid(),
-            ConversationId = conversationId,
-            Content = response,
-            Direction = MessageDirection.Outbound,
-            Type = MessageType.Text,
-            CreatedAt = DateTime.UtcNow,
-            IsFromBot = true
-        };
-        await _messageRepository.AddAsync(outgoingMessage, cancellationToken);
-
-        _logger.LogInformation("Generated response for conversation: {ConversationId}", conversationId);
-
-        return OrchestratorResult.Success(response, intentResult);
+            _logger.LogError(ex, "Error procesando mensaje para conversación: {ConversationId}", conversationId);
+            return OrchestratorResult.Failed($"Error interno: {ex.Message}");
+        }
     }
 
     /// <summary>
-    /// Creates a new conversation.
+    /// Clasifica la intención del mensaje del cliente.
+    /// </summary>
+    private async Task<IntentResult> ClassifyIntentAsync(
+        string customerMessage,
+        CancellationToken cancellationToken)
+    {
+        var plugin = GetRequiredPlugin(IntentClassificationPluginName);
+
+        try
+        {
+            var result = await _kernel.InvokeAsync<IntentResult>(
+                plugin["classify_intent"],
+                new() { ["customerMessage"] = customerMessage },
+                cancellationToken);
+
+            return result ?? new IntentResult
+            {
+                Intent = IntentCategory.General,
+                Confidence = 0.5,
+                Reasoning = "No se pudo clasificar la intención"
+            };
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Error clasificando intención, usando valor por defecto");
+            return new IntentResult
+            {
+                Intent = IntentCategory.General,
+                Confidence = 0.3,
+                Reasoning = "Error en clasificación"
+            };
+        }
+    }
+
+    /// <summary>
+    /// Obtiene contexto relevante de la base de conocimiento.
+    /// </summary>
+    private async Task<string> GetKnowledgeContextAsync(
+        string query,
+        CancellationToken cancellationToken)
+    {
+        var plugin = GetRequiredPlugin(KnowledgeRetrievalPluginName);
+
+        try
+        {
+            var context = await _kernel.InvokeAsync<string>(
+                plugin["get_formatted_context"],
+                new() { ["query"] = query, ["maxDocuments"] = 3 },
+                cancellationToken);
+
+            return context ?? string.Empty;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Error obteniendo contexto de conocimiento");
+            return string.Empty;
+        }
+    }
+
+    /// <summary>
+    /// Construye el historial de conversación reciente.
+    /// </summary>
+    private async Task<string> BuildConversationHistoryAsync(
+        Guid conversationId,
+        CancellationToken cancellationToken)
+    {
+        var recentMessages = await _messageRepository.GetRecentMessagesAsync(conversationId, 5, cancellationToken);
+
+        var historyBuilder = new System.Text.StringBuilder();
+        foreach (var msg in recentMessages.OrderBy(m => m.CreatedAt))
+        {
+            var speaker = msg.IsFromBot ? "Agente" : "Cliente";
+            historyBuilder.AppendLine($"{speaker}: {msg.Content}");
+        }
+
+        return historyBuilder.ToString();
+    }
+
+    /// <summary>
+    /// Genera una respuesta usando el plugin de generación.
+    /// </summary>
+    private async Task<string> GenerateResponseAsync(
+        string customerMessage,
+        IntentResult intentResult,
+        string context,
+        string conversationHistory,
+        CancellationToken cancellationToken)
+    {
+        var plugin = GetRequiredPlugin(ResponseGenerationPluginName);
+
+        try
+        {
+            var response = await _kernel.InvokeAsync<string>(
+                plugin["generate_response"],
+                new()
+                {
+                    ["customerMessage"] = customerMessage,
+                    ["intent"] = intentResult.Intent.ToString(),
+                    ["context"] = context,
+                    ["conversationHistory"] = conversationHistory
+                },
+                cancellationToken);
+
+            return response ?? "Lo siento, no pude generar una respuesta. ¿Podría reformular su pregunta?";
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error generando respuesta");
+            return "Disculpe, estamos experimentando dificultades técnicas. Por favor, intente de nuevo en unos momentos.";
+        }
+    }
+
+    /// <summary>
+    /// Crea una nueva conversación.
     /// </summary>
     public async Task<Conversation> CreateConversationAsync(
         string customerId,
@@ -153,6 +305,8 @@ public class ConversationOrchestrator
         string? customerEmail = null,
         CancellationToken cancellationToken = default)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(customerId, nameof(customerId));
+
         var conversation = new Conversation
         {
             Id = Guid.NewGuid(),
@@ -167,14 +321,14 @@ public class ConversationOrchestrator
 
         await _conversationRepository.AddAsync(conversation, cancellationToken);
 
-        _logger.LogInformation("Created new conversation: {ConversationId} for customer: {CustomerId}",
+        _logger.LogInformation("Conversación creada: {ConversationId} para cliente: {CustomerId}",
             conversation.Id, customerId);
 
         return conversation;
     }
 
     /// <summary>
-    /// Ends a conversation with optional summary.
+    /// Finaliza una conversación con resumen opcional.
     /// </summary>
     public async Task<Conversation> EndConversationAsync(
         Guid conversationId,
@@ -185,7 +339,7 @@ public class ConversationOrchestrator
         var conversation = await _conversationRepository.GetByIdAsync(conversationId, cancellationToken);
         if (conversation == null)
         {
-            throw new InvalidOperationException($"Conversation not found: {conversationId}");
+            throw new InvalidOperationException($"Conversación no encontrada: {conversationId}");
         }
 
         conversation.Status = status;
@@ -195,20 +349,26 @@ public class ConversationOrchestrator
 
         await _conversationRepository.UpdateAsync(conversation, cancellationToken);
 
-        _logger.LogInformation("Ended conversation: {ConversationId} with status: {Status}",
+        _logger.LogInformation("Conversación finalizada: {ConversationId} con estado: {Status}",
             conversationId, status);
 
         return conversation;
     }
 
-    private bool ShouldEscalate(IntentResult intentResult)
+    /// <summary>
+    /// Determina si se debe escalar la conversación.
+    /// </summary>
+    private static bool ShouldEscalate(IntentResult intentResult)
     {
-        // Escalate for complaints, emergencies, or low confidence
+        // Escalar para quejas, emergencias, o baja confianza
         return intentResult.Intent == IntentCategory.Complaint ||
                intentResult.Intent == IntentCategory.Emergency ||
                intentResult.Confidence < 0.5;
     }
 
+    /// <summary>
+    /// Maneja la escalación de una conversación.
+    /// </summary>
     private async Task<OrchestratorResult> HandleEscalationAsync(
         Conversation conversation,
         IntentResult intentResult,
@@ -220,9 +380,9 @@ public class ConversationOrchestrator
 
         var escalationMessage = intentResult.Intent switch
         {
-            IntentCategory.Emergency => "I understand this is urgent. Let me connect you with a specialist immediately.",
-            IntentCategory.Complaint => "I'm sorry to hear about your experience. Let me transfer you to a supervisor who can help resolve this.",
-            _ => "Let me connect you with a human agent who can better assist you with this request."
+            IntentCategory.Emergency => "Entiendo que esto es urgente. Permítame conectarlo con un especialista inmediatamente.",
+            IntentCategory.Complaint => "Lamento escuchar sobre su experiencia. Permítame transferirlo con un supervisor que pueda ayudarle a resolver esto.",
+            _ => "Permítame conectarlo con un agente humano que pueda asistirle mejor con esta solicitud."
         };
 
         return OrchestratorResult.Escalated(escalationMessage, intentResult);
@@ -230,7 +390,7 @@ public class ConversationOrchestrator
 }
 
 /// <summary>
-/// Result of the conversation orchestration process.
+/// Resultado del proceso de orquestación de conversación.
 /// </summary>
 public record OrchestratorResult
 {

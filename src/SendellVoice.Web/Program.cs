@@ -5,6 +5,7 @@ using SendellVoice.Application;
 using SendellVoice.Application.Common.Interfaces;
 using SendellVoice.Infrastructure;
 using SendellVoice.Infrastructure.Data;
+using SendellVoice.Web.Configuration;
 using SendellVoice.Web.HealthChecks;
 using SendellVoice.Web.Middleware;
 using Serilog;
@@ -66,19 +67,44 @@ try
         });
     });
 
-    // Add CORS
+    // Add CORS - Configuración segura basada en entorno
+    var allowedOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>()
+        ?? (builder.Environment.IsDevelopment()
+            ? new[] { "http://localhost:3000", "http://localhost:5173", "http://localhost:8080" }
+            : Array.Empty<string>());
+
     builder.Services.AddCors(options =>
     {
         options.AddDefaultPolicy(policy =>
         {
-            policy.AllowAnyOrigin()
-                  .AllowAnyMethod()
-                  .AllowAnyHeader();
+            if (builder.Environment.IsDevelopment() && allowedOrigins.Length == 0)
+            {
+                // Solo en desarrollo y sin configuración específica
+                policy.AllowAnyOrigin()
+                      .AllowAnyMethod()
+                      .AllowAnyHeader();
+            }
+            else
+            {
+                // Producción: CORS restrictivo
+                policy.WithOrigins(allowedOrigins)
+                      .WithMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
+                      .WithHeaders("Content-Type", "Authorization", "X-API-Key")
+                      .SetPreflightMaxAge(TimeSpan.FromMinutes(10));
+            }
         });
     });
 
     // Add HttpClient for health checks
     builder.Services.AddHttpClient();
+
+    // Registrar configuraciones
+    builder.Services.Configure<FileUploadSettings>(
+        builder.Configuration.GetSection(FileUploadSettings.SectionName));
+    builder.Services.Configure<SecuritySettings>(
+        builder.Configuration.GetSection(SecuritySettings.SectionName));
+    builder.Services.Configure<RateLimitingSettings>(
+        builder.Configuration.GetSection(RateLimitingSettings.SectionName));
 
     // Add Application and Infrastructure services
     builder.Services.AddApplicationServices();

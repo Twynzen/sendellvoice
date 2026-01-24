@@ -4,6 +4,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using OllamaSharp;
 using OllamaSharp.Models;
+using OllamaSharp.Models.Chat;
 using SendellVoice.Application.Common.Interfaces;
 using SendellVoice.Infrastructure.Configuration;
 
@@ -103,7 +104,7 @@ public class OllamaService : ILlmService, IEmbeddingService, IDisposable
         var response = await _client.EmbedAsync(new EmbedRequest
         {
             Model = _settings.EmbeddingModel,
-            Input = new[] { text }
+            Input = new List<string> { text }
         }, cancellationToken);
 
         return response.Embeddings?.FirstOrDefault()?.Select(d => (float)d).ToArray()

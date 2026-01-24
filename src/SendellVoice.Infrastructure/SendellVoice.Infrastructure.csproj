@@ -21,12 +21,12 @@
     <PackageReference Include="Microsoft.SemanticKernel.Connectors.Ollama" Version="1.69.0-alpha" />
 
     <!-- Azure AI Services -->
-    <PackageReference Include="Azure.AI.OpenAI" Version="2.1.0" />
+    <PackageReference Include="Azure.AI.OpenAI" Version="2.7.0-beta.2" />
     <PackageReference Include="Microsoft.CognitiveServices.Speech" Version="1.42.0" />
     <PackageReference Include="Azure.Search.Documents" Version="11.6.0" />
 
     <!-- Local Alternatives -->
-    <PackageReference Include="OllamaSharp" Version="4.0.0" />
+    <PackageReference Include="OllamaSharp" Version="5.4.12" />
     <PackageReference Include="Whisper.net" Version="1.7.4" />
     <PackageReference Include="Whisper.net.Runtime" Version="1.7.4" />
     <PackageReference Include="Qdrant.Client" Version="1.12.0" />

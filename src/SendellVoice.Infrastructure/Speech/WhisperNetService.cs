@@ -50,7 +50,7 @@ public class WhisperNetService : ISpeechToTextService, IDisposable
                 }
 
                 var modelType = GetModelTypeFromPath(modelPath);
-                using var stream = await WhisperGgmlDownloader.GetGgmlModelAsync(modelType, cancellationToken);
+                using var stream = await WhisperGgmlDownloader.GetGgmlModelAsync(modelType);
                 await using var file = File.Create(modelPath);
                 await stream.CopyToAsync(file, cancellationToken);
 

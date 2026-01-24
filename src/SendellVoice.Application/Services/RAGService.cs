@@ -232,10 +232,10 @@ public class RAGService
 
         // Build context from search results
         var contextBuilder = new System.Text.StringBuilder();
-        foreach (var result in searchResults)
+        foreach (var searchResult in searchResults)
         {
-            contextBuilder.AppendLine($"Source: {result.SourceFile}");
-            contextBuilder.AppendLine(result.Content);
+            contextBuilder.AppendLine($"Source: {searchResult.SourceFile}");
+            contextBuilder.AppendLine(searchResult.Content);
             contextBuilder.AppendLine("---");
         }
 

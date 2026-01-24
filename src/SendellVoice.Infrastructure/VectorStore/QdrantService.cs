@@ -83,7 +83,7 @@ public class QdrantService : IVectorStoreService
         const int batchSize = 100;
         for (int i = 0; i < points.Count; i += batchSize)
         {
-            var batch = points.Skip(i).Take(batchSize);
+            var batch = points.Skip(i).Take(batchSize).ToList();
             await _client.UpsertAsync(CollectionName, batch, cancellationToken: cancellationToken);
         }
 
@@ -148,9 +148,22 @@ public class QdrantService : IVectorStoreService
     {
         if (Guid.TryParse(documentId, out var guid))
         {
+            var filter = new Filter
+            {
+                Must =
+                {
+                    new Condition
+                    {
+                        HasId = new HasIdCondition
+                        {
+                            HasId = { new PointId { Uuid = documentId } }
+                        }
+                    }
+                }
+            };
             await _client.DeleteAsync(
                 CollectionName,
-                new PointsSelector { Points = new PointsIdsList { Ids = { new PointId { Uuid = documentId } } } },
+                filter,
                 cancellationToken: cancellationToken);
         }
 
@@ -176,7 +189,7 @@ public class QdrantService : IVectorStoreService
 
         await _client.DeleteAsync(
             CollectionName,
-            new PointsSelector { Filter = filter },
+            filter,
             cancellationToken: cancellationToken);
 
         _logger.LogInformation("Deleted documents from Qdrant with source: {Source}", sourceFile);
